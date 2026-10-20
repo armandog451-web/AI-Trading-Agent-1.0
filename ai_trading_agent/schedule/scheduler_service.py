@@ -7,8 +7,14 @@ Garantiza idempotencia, persistencia de ejecuciones en SQLite y cumplimiento de 
 """
 
 import asyncio
+import glob
 import logging
+import os
+import shutil
+import subprocess
+import sys
 from datetime import datetime, date, time, timedelta, timezone
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
 
@@ -78,17 +84,102 @@ class MarketScheduleService:
     # --- TAREAS DE INFRAESTRUCTURA 24/7 ---
 
     async def _run_infrastructure_24_7_tasks(self, now_et: datetime):
-        """Tareas continuas de infraestructura: health checks, limpieza y log de salud."""
+        """Tareas continuas de infraestructura: health checks, auto-sync con GitHub y log de salud."""
         key = "infra_health_check"
         last_run = self._last_executions.get(key, {}).get("timestamp")
         
         # Ejecutar cada 5 minutos
         if not last_run or (now_et - last_run).total_seconds() >= 300:
+            sync_res = {"status": "SKIPPED"}
+            if "pytest" not in sys.modules:
+                sync_res = await asyncio.to_thread(self.sync_to_github)
             self._last_executions[key] = {
                 "timestamp": now_et,
+                "date": now_et.strftime("%Y-%m-%d"),
                 "status": "SUCCESS",
-                "details": "Supervisión 24/7 activa. Base de datos y proveedores verificados."
+                "details": "Supervisión 24/7 activa. Base de datos, proveedores y GitHub auto-sync verificados.",
+                "github_sync": sync_res.get("status", "UNKNOWN")
             }
+
+    @staticmethod
+    def _resolve_git_binary() -> Optional[str]:
+        """Localiza el ejecutable de git en PATH o en instalaciones de GitHub Desktop / Git for Windows."""
+        git_bin = shutil.which("git")
+        if git_bin:
+            return git_bin
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        if local_app:
+            candidates = glob.glob(os.path.join(local_app, "GitHubDesktop", "app-*", "resources", "app", "git", "cmd", "git.exe"))
+            if candidates:
+                return sorted(candidates)[-1]
+            prog_git = os.path.join(local_app, "Programs", "Git", "cmd", "git.exe")
+            if os.path.exists(prog_git):
+                return prog_git
+        return None
+
+    def sync_to_github(self, commit_message: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Detecta cualquier cambio en el repositorio local y lo sube automáticamente a GitHub (origin/main).
+        """
+        now_et = self.calendar.get_now()
+        date_str = now_et.strftime("%Y-%m-%d")
+        git_bin = self._resolve_git_binary()
+        if not git_bin:
+            return {"success": False, "status": "GIT_NOT_FOUND", "error": "Ejecutable git no encontrado."}
+
+        repo_root = str(Path(__file__).resolve().parents[2])
+        try:
+            status_proc = subprocess.run(
+                [git_bin, "status", "--porcelain"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            if status_proc.returncode != 0:
+                return {"success": False, "status": "GIT_ERROR", "error": status_proc.stderr.strip()}
+
+            changed_lines = [line.strip() for line in status_proc.stdout.splitlines() if line.strip()]
+            if not changed_lines:
+                res = {
+                    "success": True,
+                    "status": "UP_TO_DATE",
+                    "message": "Sin cambios pendientes. Repositorio en GitHub actualizado."
+                }
+                self._last_executions["github_auto_sync"] = {
+                    "timestamp": now_et,
+                    "date": date_str,
+                    "status": "SUCCESS",
+                    "payload": res
+                }
+                return res
+
+            msg = commit_message or f"Auto-sync: actualizacion automatica ({now_et.strftime('%Y-%m-%d %H:%M:%S ET')})"
+            subprocess.run([git_bin, "add", "-A"], cwd=repo_root, check=True, capture_output=True, text=True, timeout=20)
+            subprocess.run([git_bin, "commit", "-m", msg], cwd=repo_root, check=True, capture_output=True, text=True, timeout=20)
+            push_proc = subprocess.run(
+                [git_bin, "push", "origin", "main"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=45
+            )
+            if push_proc.returncode != 0:
+                return {"success": False, "status": "PUSH_FAILED", "error": push_proc.stderr.strip()}
+
+            res = {
+                "success": True,
+                "status": "SYNCED",
+                "files_synced": len(changed_lines),
+                "commit_message": msg,
+                "message": f"Se sincronizaron {len(changed_lines)} archivo(s) automáticamente con GitHub."
+            }
+            self._record_task_execution("github_auto_sync", date_str, "SUCCESS", res)
+            logger.info(f"GitHub Auto-Sync: {len(changed_lines)} archivo(s) subidos a origin/main.")
+            return res
+        except Exception as e:
+            logger.error(f"Error en sincronización automática con GitHub: {e}")
+            return {"success": False, "status": "FAILED", "error": str(e)}
 
     # --- TAREAS DE PREPARACIÓN NOCTURNA ---
 

@@ -98,3 +98,9 @@ def test_16_d21_direct_moomoo_execution_pipeline():
     assert res["strategy_id"] == "D21_RangeCompress_5d"
     assert res["broker"] == "moomoo"
     assert set(res["evaluated_symbols"].keys()) == {"SPY", "QQQ", "IWM", "DIA"}
+
+
+def test_17_github_auto_sync_resolution():
+    git_bin = master_scheduler._resolve_git_binary()
+    assert git_bin is not None
+    assert hasattr(master_scheduler, "sync_to_github")
