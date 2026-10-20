@@ -110,8 +110,8 @@ class AIResearchAgent:
         iterations_limit = max_iterations or self.max_iterations_per_cycle
         log_event("INFO", f"AI Research Agent: Iniciando ciclo adaptativo (max_iterations={iterations_limit}) para {symbol}...")
 
-        # 1. Catálogo semilla
-        existing_strats = strategy_registry.list_strategies()
+        # 1. Catálogo semilla (exclusivamente estrategias en estado RESEARCH; nunca tocar CANDIDATE/PAPER/APPROVED)
+        existing_strats = strategy_registry.list_strategies(status_filter=StrategyStatus.RESEARCH)
         if not existing_strats:
             seeds = genesis_engine.create_seed_strategies()
             for s in seeds:
