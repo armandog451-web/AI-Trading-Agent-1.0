@@ -234,8 +234,159 @@ class MarketScheduleService:
             self._record_task_execution(task_id, date_str, "FAILED", {"error": str(e)})
             return {"success": False, "status": "FAILED", "error": str(e)}
 
+    async def evaluate_and_execute_d21_paper(self) -> Dict[str, Any]:
+        """
+        Evalúa las 3 condiciones de D21_RangeCompress_5d sobre ['SPY', 'QQQ', 'IWM', 'DIA'].
+        Si las 3 condiciones se cumplen (Tendencia SMA50 + Ruptura Donchian 20d + RVOL >= 1.25x),
+        ejecuta directamente la orden en Moomoo Paper (sin pedir confirmación manual)
+        y envía únicamente la notificación a Telegram.
+        """
+        from ai_trading_agent.strategy_lab.registry.registry import strategy_registry
+        from ai_trading_agent.strategy_lab.core.models import StrategyStatus
+        from ai_trading_agent.data.providers.yfinance_provider import yfinance_provider
+        from ai_trading_agent.strategy_lab.backtesting.daily_execution_simulator import (
+            DailyFeaturePrecomputer, DailyStrategyEvaluator
+        )
+        from ai_trading_agent.domain.models import TradeProposal, PaperOrder, DecisionRecord
+        from ai_trading_agent.domain.enums import (
+            SignalDirection, RiskDecision, OrderSide, OrderType, TradingMode, MarketRegime
+        )
+        from ai_trading_agent.risk.engine import risk_engine
+        from ai_trading_agent.execution.brokers.unified_manager import unified_broker
+        from ai_trading_agent.journal.trade_journal import trade_journal
+
+        strat = strategy_registry.get_strategy("D21_RangeCompress_5d")
+        if not strat or strat.status != StrategyStatus.PAPER:
+            return {"status": "SKIPPED", "reason": "D21_RangeCompress_5d is not in PAPER status"}
+
+        evaluator = DailyStrategyEvaluator(
+            family="daily_range_compression_breakout",
+            holding_horizon_days=5,
+            exit_geometry="time_stop",
+            rr_ratio=2.0,
+            atr_mult=1.5,
+            trailing_mult=2.0,
+            parameters=strat.parameters
+        )
+
+        # Asegurar que el broker activo para la ejecución directa sea Moomoo
+        unified_broker.set_active_broker("moomoo")
+        executed_orders = []
+        evaluated_symbols = {}
+
+        for symbol in ["SPY", "QQQ", "IWM", "DIA"]:
+            bars = yfinance_provider.get_historical_bars(symbol, count=80, interval="1d")
+            if not bars or len(bars) < 55:
+                evaluated_symbols[symbol] = "INSUFFICIENT_BARS"
+                continue
+
+            feat = DailyFeaturePrecomputer.precompute(bars)
+            idx = len(bars) - 1
+            sig = evaluator.evaluate_signal_fast(symbol, bars[idx], idx, bars, feat)
+
+            if not sig:
+                evaluated_symbols[symbol] = "NO_TRADE"
+                continue
+
+            # Las 3 condiciones de D21 se han cumplido: validar con RiskEngine (0.25% / $2,500 cap, max 2 posiciones)
+            open_pos = unified_broker.get_positions()
+            if len(open_pos) >= 2 or any(p.get("symbol") == symbol for p in open_pos):
+                evaluated_symbols[symbol] = "SKIPPED_CONCURRENCY_LIMIT"
+                continue
+
+            direction = SignalDirection.BUY if sig["direction"] == "BUY" else SignalDirection.SELL
+            decision_id = f"d21_{symbol}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            proposal = TradeProposal(
+                decision_id=decision_id,
+                symbol=symbol,
+                direction=direction,
+                entry_price=sig["entry_price"],
+                stop_loss=sig["stop_loss"],
+                take_profit=sig["take_profit"],
+                rr_ratio=2.0,
+                timestamp=datetime.utcnow(),
+                rationale=(
+                    f"D21_RangeCompress_5d: 3 condiciones cumplidas en {symbol} "
+                    f"(Close=${sig['entry_price']:.2f}, RVOL>=1.25x, Donchian20 Breakout + SMA50)."
+                )
+            )
+
+            acct = unified_broker.get_account_summary()
+            risk_assessment = risk_engine.assess_proposal(
+                proposal=proposal,
+                equity=acct.get("equity", 1000000.0),
+                daily_pnl=acct.get("realized_pnl", 0.0),
+                open_positions=[]
+            )
+
+            if risk_assessment.decision != RiskDecision.APPROVED:
+                evaluated_symbols[symbol] = f"RISK_REJECTED: {risk_assessment.reasons}"
+                continue
+
+            # EJECUCIÓN DIRECTA EN MOOMOO PAPER (SIN CONFIRMACIÓN MANUAL)
+            side = OrderSide.BUY if direction == SignalDirection.BUY else OrderSide.SELL
+            order = PaperOrder(
+                order_id=f"moo_{decision_id}",
+                decision_id=decision_id,
+                symbol=symbol,
+                side=side,
+                order_type=OrderType.MARKET,
+                quantity=risk_assessment.approved_quantity,
+                requested_price=proposal.entry_price,
+                stop_loss=proposal.stop_loss,
+                take_profit=proposal.take_profit,
+                created_at=datetime.utcnow()
+            )
+            filled_order = unified_broker.submit_order(order, mode=TradingMode.PAPER_TRADING)
+
+            # Registrar en TradeJournal
+            record = DecisionRecord(
+                decision_id=decision_id,
+                timestamp=datetime.utcnow(),
+                symbol=symbol,
+                market_regime=MarketRegime.BULL_TREND if direction == SignalDirection.BUY else MarketRegime.BEAR_TREND,
+                signal_direction=direction,
+                signal_score=85.0,
+                reasons=[proposal.rationale, f"Ejecutada directamente en Moomoo ({filled_order.order_id})"],
+                risk_decision=RiskDecision.APPROVED,
+                risk_reasons=risk_assessment.reasons,
+                order_id=filled_order.order_id,
+                order_status=filled_order.status,
+                execution_price=filled_order.avg_fill_price
+            )
+            trade_journal.log_decision(record)
+
+            alert_payload = {
+                "symbol": symbol,
+                "direction": direction.value,
+                "score": 85.0,
+                "market_regime": sig.get("regime", "BULL_TREND"),
+                "entry_price": filled_order.avg_fill_price or proposal.entry_price,
+                "stop_loss": proposal.stop_loss,
+                "take_profit": proposal.take_profit,
+                "quantity": filled_order.quantity,
+                "rr_ratio": 2.0,
+                "trading_mode": "MOOMOO_DIRECT_EXECUTION (PAPER)",
+                "order_id": filled_order.order_id,
+                "rationale": proposal.rationale
+            }
+            try:
+                telegram_notifier.send_signal_alert(alert_payload)
+            except Exception as ex:
+                logger.warning(f"No se pudo enviar notificación a Telegram: {ex}")
+
+            evaluated_symbols[symbol] = f"EXECUTED_MOOMOO ({filled_order.order_id})"
+            executed_orders.append(alert_payload)
+
+        return {
+            "strategy_id": "D21_RangeCompress_5d",
+            "broker": "moomoo",
+            "evaluated_symbols": evaluated_symbols,
+            "executed_orders": executed_orders
+        }
+
     async def run_daily_report(self, force: bool = True, is_auto: bool = False) -> Dict[str, Any]:
-        """Genera el informe diario post-cierre y sincronización del journal."""
+        """Genera el informe diario post-cierre, evalúa D21 con ejecución directa en Moomoo y sincroniza el journal."""
         now_et = self.calendar.get_now()
         date_str = now_et.strftime("%Y-%m-%d")
         task_id = f"daily_post_close_{date_str}"
@@ -248,11 +399,13 @@ class MarketScheduleService:
             }
 
         try:
+            d21_eval = await self.evaluate_and_execute_d21_paper()
             report_payload = {
                 "date": date_str,
                 "timestamp": now_et.isoformat(),
                 "trading_mode": settings.TRADING_MODE.value,
-                "summary": "Revisión diaria completada con éxito. Journal actualizado."
+                "d21_evaluation": d21_eval,
+                "summary": "Revisión diaria y evaluación automática D21 en Moomoo completadas con éxito."
             }
             self._record_task_execution(task_id, date_str, "SUCCESS", report_payload)
 

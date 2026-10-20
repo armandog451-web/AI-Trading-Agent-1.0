@@ -27,6 +27,15 @@ def _is_port_listening(host: str, port: int, timeout: float = 0.3) -> bool:
         return False
 
 
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    try:
+        if val is None or str(val).strip().upper() in ("N/A", "NAN", "NONE", ""):
+            return default
+        return float(val)
+    except Exception:
+        return default
+
+
 class MoomooBrokerAdapter(BaseBrokerAdapter):
     """Adaptador institucional para Moomoo OpenD."""
 
@@ -34,8 +43,8 @@ class MoomooBrokerAdapter(BaseBrokerAdapter):
         self.host = settings.MOOMOO_HOST
         self.port = settings.MOOMOO_PORT
         self.acc_id = settings.MOOMOO_ACC_ID
-        self._sim_cash = 100000.0
-        self._sim_equity = 100000.0
+        self._sim_cash = settings.PAPER_INITIAL_CAPITAL
+        self._sim_equity = settings.PAPER_INITIAL_CAPITAL
         self._sim_positions = []
 
     @property
@@ -62,15 +71,19 @@ class MoomooBrokerAdapter(BaseBrokerAdapter):
                 trd_ctx.close()
                 if ret == 0 and not funds.empty:
                     row = funds.iloc[0]
+                    cash_val = _safe_float(row.get("cash"), self._sim_cash)
+                    equity_val = _safe_float(row.get("total_assets"), self._sim_equity)
+                    power_val = _safe_float(row.get("power"), cash_val * 2.0)
+                    realized_val = _safe_float(row.get("realized_pl"), 0.0)
                     return {
                         "broker": self.name,
                         "account_id": self.acc_id,
                         "status": f"Conectado en Vivo ({self.host}:{self.port})",
                         "connected": True,
-                        "cash": float(row.get("cash", 0.0)),
-                        "equity": float(row.get("total_assets", 0.0)),
-                        "buying_power": float(row.get("power", 0.0)),
-                        "realized_pnl": float(row.get("realized_pl", 0.0))
+                        "cash": cash_val,
+                        "equity": equity_val,
+                        "buying_power": power_val,
+                        "realized_pnl": realized_val
                     }
             except Exception as e:
                 logger.warning(f"Error consultando cuenta en Moomoo OpenD: {e}")

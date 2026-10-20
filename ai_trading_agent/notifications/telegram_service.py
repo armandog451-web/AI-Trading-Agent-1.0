@@ -102,15 +102,19 @@ class TelegramAlertService:
 
         side_emoji = "🟢" if "BUY" in str(direction).upper() else "🔴"
         action_str = "COMPRA (LONG)" if "BUY" in str(direction).upper() else "VENTA (SHORT)"
+        order_id = pipeline_result.get("order_id")
+        exec_header = "✅ *ORDEN EJECUTADA EN MOOMOO*" if order_id else "⚡ *SUPERROBOT — SEÑAL CUANTITATIVA*"
+        order_line = f"🧾 *Orden Moomoo ID:* `{order_id}`\n" if order_id else ""
 
         msg = (
-            f"⚡ *SUPERROBOT — SEÑAL CUANTITATIVA*\n"
+            f"{exec_header}\n"
             f"───────────────────────────────\n"
             f"🎯 *Activo:* `{sym}`\n"
             f"{side_emoji} *Acción:* `{action_str}`\n"
+            f"{order_line}"
             f"🤖 *Confluencia:* `{score:.1f} / 100` | *Régimen:* `{regime}`\n\n"
-            f"💵 *Entrada Estimada:* `${entry:,.2f}`\n"
-            f"🔢 *Cantidad Aprobada:* `{qty} acciones` (Riesgo exacto 1%)\n"
+            f"💵 *Precio Ejecución:* `${entry:,.2f}`\n"
+            f"🔢 *Cantidad:* `{qty} acciones` (Riesgo controlado 0.25%)\n"
             f"🛑 *Stop Loss:* `${sl:,.2f}`\n"
             f"🎯 *Take Profit:* `${tp:,.2f}`\n"
             f"⚖️ *Ratio Riesgo/Beneficio:* `1 : {rr:.1f}`\n"
