@@ -39,7 +39,7 @@ class TelegramAlertService:
             "parse_mode": "Markdown"
         }
         try:
-            with httpx.Client(timeout=8.0) as client:
+            with httpx.Client(timeout=8.0, verify=False) as client:
                 resp = client.post(url, json=payload)
                 return resp.status_code == 200
         except Exception as e:
@@ -61,7 +61,7 @@ class TelegramAlertService:
             "parse_mode": "Markdown"
         }
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
                 resp = await client.post(url, json=payload)
                 return resp.status_code == 200
         except Exception as e:
