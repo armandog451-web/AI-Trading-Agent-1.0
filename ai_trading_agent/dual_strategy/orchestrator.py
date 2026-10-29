@@ -59,6 +59,7 @@ class DualStrategyOrchestrator:
         planned_stop: float = 0.0
         planned_target: float = 0.0
         entry_signal: Optional[ReproducibleSignal] = None
+        active_res_id: Optional[str] = None
 
         # Iterar barra a barra de 15m
         for i in range(len(bars_15m) - 1):
@@ -74,6 +75,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     continue
 
@@ -84,6 +88,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     continue
 
@@ -94,6 +101,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     continue
 
@@ -126,6 +136,9 @@ class DualStrategyOrchestrator:
                         planned_stop = sig.stop_reference
                         planned_target = sig.target_reference
                         entry_signal = sig
+                        active_res_id = reason.split("Reserva=")[-1].strip() if "Reserva=" in reason else None
+                        if active_res_id:
+                            risk_engine.commit_reservation(active_res_id)
                         strategy.record_entry_executed(sig.symbol)
 
         return trades
@@ -154,6 +167,7 @@ class DualStrategyOrchestrator:
         planned_stop: float = 0.0
         planned_target: float = 0.0
         bars_held: int = 0
+        active_res_id: Optional[str] = None
 
         for i in range(len(bars_4h) - 1):
             curr_bar = bars_4h[i]
@@ -170,6 +184,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     bars_held = 0
                     continue
@@ -181,6 +198,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     bars_held = 0
                     continue
@@ -192,6 +212,9 @@ class DualStrategyOrchestrator:
                     )
                     trades.append(closed_trade)
                     risk_engine.update_equity(risk_engine.current_equity + closed_trade.net_pnl, closed_trade.net_pnl)
+                    if active_res_id:
+                        risk_engine.release_reservation(active_res_id)
+                        active_res_id = None
                     open_position = None
                     bars_held = 0
                     continue
@@ -222,6 +245,9 @@ class DualStrategyOrchestrator:
                         planned_stop = sig.stop_reference
                         planned_target = sig.target_reference
                         bars_held = 0
+                        active_res_id = reason.split("Reserva=")[-1].strip() if "Reserva=" in reason else None
+                        if active_res_id:
+                            risk_engine.commit_reservation(active_res_id)
 
         return trades
 
