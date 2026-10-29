@@ -22,7 +22,8 @@ from ai_trading_agent.dual_strategy.strategies.intraday_breakout import OrbIntra
 from ai_trading_agent.dual_strategy.strategies.swing_pullback import OrbSwingPullbackV1
 from ai_trading_agent.dual_strategy.risk import PortfolioRiskEngine
 from ai_trading_agent.dual_strategy.simulation import (
-    SimulationExecutionEngine, SecurityViolationError, PaperBrokerSecurityGuard
+    SimulationExecutionEngine, SecurityViolationError, PaperBrokerSecurityGuard,
+    SynchronousPortfolioSimulator
 )
 from ai_trading_agent.dual_strategy.tracker import EvidenceJournal
 from ai_trading_agent.strategy_lab.registry.registry import StrategyRegistry
@@ -441,3 +442,71 @@ class TestOracleBotV2DualStrategy:
         # Verificar que una nueva propuesta no sufre falso bloqueo por reserva huérfana
         approved2, qty2, _ = risk_engine.evaluate_and_size_proposal(sig, [], 1000000.0)
         assert approved2 is True
+
+    # 29. Regresión Fase 6: Procesamiento sincrónico multi-activo en estricto orden temporal global
+    def test_29_synchronous_multi_asset_chronological_order(self):
+        risk_engine = PortfolioRiskEngine(reference_equity=1000000.0)
+        sim_engine = SimulationExecutionEngine(cost_multiplier=1.0)
+        simulator = SynchronousPortfolioSimulator(risk_engine=risk_engine, sim_engine=sim_engine)
+
+        # Crear barras sintéticas para dos activos (SPY y QQQ) en 5 momentos cronológicos
+        t0 = datetime(2026, 1, 5, 10, 0)
+        t1 = datetime(2026, 1, 5, 14, 0)
+        t2 = datetime(2026, 1, 6, 10, 0)
+        t3 = datetime(2026, 1, 6, 14, 0)
+        t4 = datetime(2026, 1, 7, 10, 0)
+
+        # Mock de 65 barras previas para permitir warmup de evaluación
+        def make_warmup(sym, base_dt):
+            return [
+                OHLCVBar(timestamp=base_dt - timedelta(hours=4 * (70 - i)), symbol=sym,
+                         open=100.0, high=102.0, low=99.0, close=101.0, volume=10000)
+                for i in range(70)
+            ]
+
+        bars_spy = make_warmup("SPY", t0) + [
+            OHLCVBar(timestamp=t0, symbol="SPY", open=100.0, high=101.0, low=99.0, close=100.5, volume=10000),
+            OHLCVBar(timestamp=t1, symbol="SPY", open=101.0, high=102.0, low=100.0, close=101.5, volume=10000),
+            OHLCVBar(timestamp=t2, symbol="SPY", open=102.0, high=115.0, low=101.0, close=112.0, volume=10000), # Take profit hit
+            OHLCVBar(timestamp=t3, symbol="SPY", open=112.0, high=113.0, low=111.0, close=112.5, volume=10000),
+        ]
+
+        bars_qqq = make_warmup("QQQ", t0) + [
+            OHLCVBar(timestamp=t0, symbol="QQQ", open=200.0, high=201.0, low=199.0, close=200.0, volume=10000),
+            OHLCVBar(timestamp=t1, symbol="QQQ", open=200.5, high=201.5, low=199.5, close=201.0, volume=10000),
+            OHLCVBar(timestamp=t2, symbol="QQQ", open=201.0, high=202.0, low=200.0, close=201.5, volume=10000),
+            OHLCVBar(timestamp=t3, symbol="QQQ", open=202.0, high=205.0, low=201.0, close=203.0, volume=10000),
+        ]
+
+        # Mock strategy que genera señal en SPY en t0 y en QQQ en t1
+        class MockTimelineStrategy:
+            def evaluate(self, symbol, bars_4h, confirmed_bars_1d=None, precomputed_daily=None):
+                curr = bars_4h[-1]
+                if symbol == "SPY" and curr.timestamp == t0:
+                    return ReproducibleSignal(
+                        strategy_id="TEST_TIMELINE", version="1.0", configuration_hash="h1", symbol="SPY",
+                        market_timestamp=curr.timestamp, evaluation_timestamp=datetime.utcnow(),
+                        direction=SignalDirection.BUY, entry_reference=100.5, stop_reference=95.0,
+                        target_reference=112.0, estimated_risk=5.5, data_snapshot_hash="d1"
+                    )
+                if symbol == "QQQ" and curr.timestamp == t1:
+                    return ReproducibleSignal(
+                        strategy_id="TEST_TIMELINE", version="1.0", configuration_hash="h2", symbol="QQQ",
+                        market_timestamp=curr.timestamp, evaluation_timestamp=datetime.utcnow(),
+                        direction=SignalDirection.BUY, entry_reference=201.0, stop_reference=195.0,
+                        target_reference=215.0, estimated_risk=6.0, data_snapshot_hash="d2"
+                    )
+                return None
+
+        trades, rejections, stats = simulator.run_simulation(
+            bars_by_symbol={"SPY": bars_spy, "QQQ": bars_qqq},
+            strategy=MockTimelineStrategy()
+        )
+
+        assert len(trades) >= 1
+        # El trade de SPY debió entrar en t1 (open de barra siguiente) y salir en t2 (high=115 >= target=110)
+        spy_trade = next(t for t in trades if t.symbol == "SPY")
+        assert spy_trade.entry_time == t1
+        assert spy_trade.exit_time == t2
+        assert spy_trade.exit_reason == "TAKE_PROFIT"
+        assert stats["daily_resets"] >= 2

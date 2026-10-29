@@ -160,3 +160,173 @@ class SimulationExecutionEngine:
             mode=open_trade.mode,
             overnight_gap_usd=overnight_gap_usd
         )
+
+
+class SynchronousPortfolioSimulator:
+    """
+    Simulador de Cartera Multi-Activo Sincrónico (Barra a Barra).
+    Garantiza:
+    1. Orden temporal global unificado a través de todos los activos.
+    2. Reinicio estricto de disyuntores diario (2R) y semanal (5R) al cambiar de sesión bursátil o semana ISO.
+    3. Evaluación de salidas prioritarias antes de evaluar nuevas entradas.
+    4. Cero look-ahead: señal evaluada con barras históricas confirmadas, entrada ejecutada en la apertura de la barra siguiente.
+    5. Liberación atómica de reservas de riesgo al cerrar posiciones.
+    """
+
+    def __init__(
+        self,
+        risk_engine: Any,
+        sim_engine: Optional[SimulationExecutionEngine] = None,
+        max_holding_bars: int = 20
+    ):
+        self.risk_engine = risk_engine
+        self.sim_engine = sim_engine or SimulationExecutionEngine()
+        self.max_holding_bars = max_holding_bars
+
+    def run_simulation(
+        self,
+        bars_by_symbol: Dict[str, List[OHLCVBar]],
+        strategy: Any,
+        precomputed_daily: Optional[Dict[str, Any]] = None,
+        daily_bars_by_symbol: Optional[Dict[str, List[OHLCVBar]]] = None,
+        macro_filter_fn: Optional[Any] = None,
+        volatility_filter_fn: Optional[Any] = None
+    ) -> Tuple[List[TradeFillRecord], List[Dict[str, Any]], Dict[str, int]]:
+        """
+        Ejecuta la simulación multi-activo bar-by-bar garantizando orden cronológico global.
+        """
+        symbols = sorted(list(bars_by_symbol.keys()))
+        
+        # 1. Unificar todas las marcas temporales en una línea cronológica ordenada
+        all_timestamps_set = set()
+        bars_lookup: Dict[str, Dict[datetime, OHLCVBar]] = {s: {} for s in symbols}
+        
+        for s in symbols:
+            for b in bars_by_symbol[s]:
+                all_timestamps_set.add(b.timestamp)
+                bars_lookup[s][b.timestamp] = b
+                
+        sorted_timestamps = sorted(list(all_timestamps_set))
+        
+        trades: List[TradeFillRecord] = []
+        rejections: List[Dict[str, Any]] = []
+        open_positions: Dict[str, Dict[str, Any]] = {}
+        
+        current_sim_date = None
+        current_sim_week = None
+        daily_resets_count = 0
+        weekly_resets_count = 0
+        
+        for t_idx, current_ts in enumerate(sorted_timestamps[:-1]):
+            next_ts = sorted_timestamps[t_idx + 1]
+            bar_date = current_ts.date()
+            bar_week = current_ts.isocalendar()[1]
+            
+            # Reinicios de disyuntores de riesgo
+            if current_sim_date is None or bar_date != current_sim_date:
+                self.risk_engine.reset_daily_circuit()
+                current_sim_date = bar_date
+                daily_resets_count += 1
+                
+            if current_sim_week is None or bar_week != current_sim_week:
+                self.risk_engine.reset_weekly_circuit()
+                current_sim_week = bar_week
+                weekly_resets_count += 1
+                
+            # A. Gestión de salidas de posiciones abiertas en current_ts
+            for s in list(open_positions.keys()):
+                curr_bar = bars_lookup[s].get(current_ts)
+                if not curr_bar:
+                    continue
+                pos = open_positions[s]
+                pos["bars_held"] += 1
+                
+                # Check Stop Loss
+                if curr_bar.low <= pos["planned_stop"] or curr_bar.open < pos["planned_stop"]:
+                    closed = self.sim_engine.simulate_exit(
+                        pos["open_trade"], curr_bar, "STOP_LOSS", pos["planned_stop"], pos["planned_target"]
+                    )
+                    trades.append(closed)
+                    self.risk_engine.update_equity(self.risk_engine.current_equity + closed.net_pnl, closed.net_pnl)
+                    self.risk_engine.release_reservation(pos["res_id"])
+                    del open_positions[s]
+                # Check Take Profit
+                elif curr_bar.high >= pos["planned_target"]:
+                    closed = self.sim_engine.simulate_exit(
+                        pos["open_trade"], curr_bar, "TAKE_PROFIT", pos["planned_stop"], pos["planned_target"]
+                    )
+                    trades.append(closed)
+                    self.risk_engine.update_equity(self.risk_engine.current_equity + closed.net_pnl, closed.net_pnl)
+                    self.risk_engine.release_reservation(pos["res_id"])
+                    del open_positions[s]
+                # Check Time Exit
+                elif pos["bars_held"] >= self.max_holding_bars:
+                    closed = self.sim_engine.simulate_exit(
+                        pos["open_trade"], curr_bar, "TIME_EXIT", pos["planned_stop"], pos["planned_target"]
+                    )
+                    trades.append(closed)
+                    self.risk_engine.update_equity(self.risk_engine.current_equity + closed.net_pnl, closed.net_pnl)
+                    self.risk_engine.release_reservation(pos["res_id"])
+                    del open_positions[s]
+                    
+            # B. Evaluación de nuevas entradas
+            if macro_filter_fn and not macro_filter_fn(current_ts):
+                continue
+                
+            for s in symbols:
+                if s in open_positions:
+                    continue
+                curr_bar = bars_lookup[s].get(current_ts)
+                next_bar = bars_lookup[s].get(next_ts)
+                if not curr_bar or not next_bar:
+                    continue
+                    
+                # Barras disponibles hasta current_ts
+                all_s_bars = [b for b in bars_by_symbol[s] if b.timestamp <= current_ts]
+                if len(all_s_bars) < 65:
+                    continue
+                eval_sub = all_s_bars[-65:]
+                
+                if volatility_filter_fn:
+                    allowed, v_reason = volatility_filter_fn(s, eval_sub, curr_bar)
+                    if not allowed:
+                        rejections.append({"time": current_ts, "symbol": s, "reason": v_reason})
+                        continue
+                        
+                b1d = daily_bars_by_symbol.get(s, []) if daily_bars_by_symbol else []
+                ctx_d = precomputed_daily.get(s) if precomputed_daily else None
+                
+                sig = strategy.evaluate(symbol=s, bars_4h=eval_sub, confirmed_bars_1d=b1d, precomputed_daily=ctx_d)
+                if sig is not None:
+                    current_open_list = [
+                        {
+                            "symbol": sym_p,
+                            "avg_entry_price": p_info["open_trade"].fill_price,
+                            "stop_loss": p_info["planned_stop"],
+                            "quantity": p_info["open_trade"].quantity
+                        }
+                        for sym_p, p_info in open_positions.items()
+                    ]
+                    approved, qty, reason = self.risk_engine.evaluate_and_size_proposal(
+                        sig, current_open_list, self.risk_engine.current_equity
+                    )
+                    if approved and qty >= 1:
+                        open_trade = self.sim_engine.simulate_entry(sig, qty, next_bar)
+                        res_id = reason.split("Reserva=")[-1].strip() if "Reserva=" in reason else "RES_SIM"
+                        self.risk_engine.commit_reservation(res_id)
+                        open_positions[s] = {
+                            "open_trade": open_trade,
+                            "planned_stop": sig.stop_reference,
+                            "planned_target": sig.target_reference,
+                            "bars_held": 0,
+                            "res_id": res_id
+                        }
+                    else:
+                        rejections.append({"time": current_ts, "symbol": s, "reason": reason})
+                        
+        stats = {
+            "daily_resets": daily_resets_count,
+            "weekly_resets": weekly_resets_count,
+            "total_rejections": len(rejections)
+        }
+        return trades, rejections, stats
