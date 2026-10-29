@@ -392,3 +392,52 @@ class TestOracleBotV2DualStrategy:
         journal = EvidenceJournal()
         journal.append_event("DATA_SPLIT", {"in_sample_pct": 60, "val_pct": 20, "test_pct": 20, "holdout_locked": True})
         assert journal.verify_integrity() is True
+
+    # 26. Regresión Fase 6: Reinicio diario estricto del disyuntor de pérdida 2R
+    def test_26_daily_loss_circuit_reset_on_new_date(self):
+        risk_engine = PortfolioRiskEngine(reference_equity=1000000.0, daily_loss_limit_r=2.0)
+        # Disparo intencionado de disyuntor diario (-$5,000)
+        risk_engine.update_equity(current_equity=994000.0, realized_pnl_delta=-6000.0)
+        assert risk_engine.is_trading_halted is True
+        assert "Pérdida diaria" in risk_engine.halt_reason
+
+        # Al cambiar de sesión bursátil, reset_daily_circuit restaura la operatividad
+        risk_engine.reset_daily_circuit()
+        assert risk_engine.daily_realized_pnl == 0.0
+        assert risk_engine.is_trading_halted is False
+        assert risk_engine.halt_reason == ""
+
+    # 27. Regresión Fase 6: Reinicio semanal estricto del disyuntor de pérdida 5R
+    def test_27_weekly_loss_circuit_reset_on_new_week(self):
+        risk_engine = PortfolioRiskEngine(reference_equity=1000000.0, weekly_loss_limit_r=5.0)
+        # Disparo intencionado de disyuntor semanal (-$12,500)
+        risk_engine.update_equity(current_equity=985000.0, realized_pnl_delta=-13000.0)
+        assert risk_engine.is_trading_halted is True
+        assert "Pérdida semanal" in risk_engine.halt_reason
+
+        # Al cambiar de semana bursátil, reset_weekly_circuit restaura la operatividad
+        risk_engine.reset_weekly_circuit()
+        assert risk_engine.weekly_realized_pnl == 0.0
+        assert risk_engine.is_trading_halted is False
+        assert risk_engine.halt_reason == ""
+
+    # 28. Regresión Fase 6: Liberación atómica de reservas de riesgo al cerrar o cancelar
+    def test_28_atomic_reservation_release_on_position_close(self):
+        risk_engine = PortfolioRiskEngine(reference_equity=1000000.0)
+        sig = ReproducibleSignal(
+            strategy_id="TEST_STRAT", version="1.0", configuration_hash="h", symbol="NVDA",
+            market_timestamp=datetime.utcnow(), evaluation_timestamp=datetime.utcnow(),
+            direction=SignalDirection.BUY, entry_reference=100.0, stop_reference=95.0,
+            target_reference=110.0, estimated_risk=5.0, data_snapshot_hash="d"
+        )
+        approved, qty, reason = risk_engine.evaluate_and_size_proposal(sig, [], 1000000.0)
+        assert approved is True
+        res_id = reason.split("Reserva=")[-1].strip()
+        assert res_id in risk_engine._reservations
+
+        # Liberar la reserva al cerrar o cancelar
+        risk_engine.release_reservation(res_id)
+        assert res_id not in risk_engine._reservations
+        # Verificar que una nueva propuesta no sufre falso bloqueo por reserva huérfana
+        approved2, qty2, _ = risk_engine.evaluate_and_size_proposal(sig, [], 1000000.0)
+        assert approved2 is True

@@ -111,6 +111,13 @@ class PortfolioRiskEngine:
                 self.is_trading_halted = False
                 self.halt_reason = ""
 
+    def reset_weekly_circuit(self):
+        with self._lock:
+            self.weekly_realized_pnl = 0.0
+            if "Pérdida semanal" in self.halt_reason:
+                self.is_trading_halted = False
+                self.halt_reason = ""
+
     def evaluate_and_size_proposal(
         self,
         signal: ReproducibleSignal,
