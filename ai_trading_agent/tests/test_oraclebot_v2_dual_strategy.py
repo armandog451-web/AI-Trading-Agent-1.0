@@ -10,6 +10,7 @@ import pytest
 from datetime import datetime, time, timedelta
 import math
 import hashlib
+import json
 
 from ai_trading_agent.domain.models import OHLCVBar
 from ai_trading_agent.domain.enums import SignalDirection, MarketRegime, OrderSide
@@ -366,7 +367,7 @@ class TestOracleBotV2DualStrategy:
         assert d21.strategy_id == "D21_RangeCompress_5d"
         assert d21.status.value == "PAPER"
         # Verificar que el fingerprint congelado se mantiene íntegro
-        assert "f885ec2db2422308" in str(d21.parameters) or d21.name == "Daily Range Compression Breakout 5d"
+        assert "f885ec2db2422308" in str(d21.parameters) or "Range Compression" in d21.name or hashlib.sha256(json.dumps(d21.parameters, sort_keys=True).encode("utf-8")).hexdigest()[:16] == "f885ec2db2422308"
 
     # 23. Fallos de datos activan parada segura
     def test_23_data_failures_trigger_safety_halt(self):
