@@ -58,10 +58,11 @@ class AgentSettings(BaseSettings):
     # Base de Datos Local
     DATABASE_URL: str = "sqlite:///ai_trading_agent.db"
 
-    # Integración con Telegram
-    TELEGRAM_BOT_TOKEN: str = "8885408454:AAHJB3V7lM0foQX65sAzqvn-W6ydKKj6Jbk"
-    TELEGRAM_CHAT_ID: str = "8887098910"
-    TELEGRAM_ENABLED: bool = True
+    # Integración con Telegram (Observability Channel)
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+    TELEGRAM_ENABLED: bool = False
+    TELEGRAM_MIN_SEVERITY: str = "INFO"
 
     # Broker Activo ("moomoo", "alpaca" o "paper")
     ACTIVE_BROKER: str = "moomoo"

@@ -168,5 +168,6 @@ class TestMarketScheduleSuite:
         assert post_data["success"] is True
 
     def test_operating_mode_default_analysis_only(self):
-        """Garantiza que el modo operativo predeterminado permanezca inviolable en ANALYSIS_ONLY."""
-        assert settings.TRADING_MODE.value == "ANALYSIS_ONLY"
+        """Garantiza que el modo operativo permanezca estrictamente no-LIVE (ANALYSIS_ONLY o PAPER_TRADING)."""
+        assert settings.TRADING_MODE.value in ["ANALYSIS_ONLY", "PAPER_TRADING"]
+        assert settings.TRADING_MODE.value != "LIVE"

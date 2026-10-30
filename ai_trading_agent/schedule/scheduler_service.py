@@ -194,19 +194,24 @@ class MarketScheduleService:
 
             # Notificar a Telegram si está habilitado
             if telegram_notifier.is_configured:
+                from ai_trading_agent.strategy_lab.registry.registry import strategy_registry
+                strat = strategy_registry.get_strategy("D21_RangeCompress_5d")
+                strat_status = strat.status.value if strat else "PAPER"
                 msg = (
-                    f"🌅 *INFORME PREMARKET AUTOMÁTICO* 🌅\n"
+                    f"🌅 <b>SUPERROBOT — REPORTE PREMARKET MATUTINO</b> 🌅\n"
                     f"───────────────────────────────\n"
-                    f"📅 *Fecha:* `{date_str}` | ⏰ *Hora ET:* `{now_et.strftime('%H:%M:%S ET')}`\n"
-                    f"⚙️ *Modo Operativo:* `{settings.TRADING_MODE.value}`\n"
+                    f"📅 <b>Fecha:</b> <code>{date_str}</code> | ⏰ <b>Hora ET:</b> <code>{now_et.strftime('%H:%M:%S ET')}</code>\n"
+                    f"⚙️ <b>Modo Operativo:</b> <code>{settings.TRADING_MODE.value}</code>\n"
+                    f"🎯 <b>Estrategia:</b> <code>D21_RangeCompress_5d</code> ({strat_status})\n"
+                    f"🔒 <b>Fingerprint:</b> <code>f885ec2db2422308</code>\n"
+                    f"🟢 <b>Estado del Mercado:</b> PREMARKET (09:20 ET)\n"
                     f"───────────────────────────────\n"
-                    f"📊 *Líderes RVOL:* NVDA (2.4x), AMD (1.8x)\n"
-                    f"📈 *Gaps Destacados:* AAPL +1.2%, NVDA +2.1%\n"
-                    f"🟢 *Estado del Mercado:* PREMARKET (09:20 ET)\n"
+                    f"📊 <b>Líderes RVOL:</b> NVDA (2.4x), AMD (1.8x)\n"
+                    f"📈 <b>Gaps Destacados:</b> AAPL +1.2%, NVDA +2.1%\n"
                     f"───────────────────────────────\n"
-                    f"🚀 *Sistema 100% calibrado para la campana de apertura.*"
+                    f"🚀 <b>Sistema 100% calibrado para la campana de apertura.</b>"
                 )
-                telegram_notifier.send_message(msg)
+                telegram_notifier.send_message_sync(msg, parse_mode="HTML")
 
             return {
                 "success": True,
@@ -257,16 +262,30 @@ class MarketScheduleService:
             self._record_task_execution(task_id, date_str, "SUCCESS", report_payload)
 
             if telegram_notifier.is_configured:
+                from ai_trading_agent.execution.paper_broker import paper_broker
+                from ai_trading_agent.strategy_lab.registry.registry import strategy_registry
+                strat = strategy_registry.get_strategy("D21_RangeCompress_5d")
+                strat_status = strat.status.value if strat else "PAPER"
+                strat_fp = "f885ec2db2422308"
+                acc = paper_broker.get_account_summary()
+                pos = paper_broker.get_positions()
+
                 msg = (
-                    f"📈 *INFORME DIARIO POST-CIERRE* 📈\n"
+                    f"📈 <b>SUPERROBOT — REPORTE DIARIO DE OPERACIONES</b>\n"
                     f"───────────────────────────────\n"
-                    f"🗓️ *Fecha:* `{date_str}`\n"
-                    f"⚙️ *Modo Operativo:* `{settings.TRADING_MODE.value}`\n"
+                    f"🗓️ <b>Fecha:</b> <code>{date_str}</code>\n"
+                    f"⚙️ <b>Modo Operativo:</b> <code>{settings.TRADING_MODE.value}</code>\n"
+                    f"🎯 <b>Estrategia:</b> <code>D21_RangeCompress_5d</code> ({strat_status})\n"
+                    f"🔒 <b>Fingerprint:</b> <code>{strat_fp}</code>\n"
+                    f"💵 <b>Capital Paper:</b> ${acc.get('equity', 1000000.0):,.2f} USD\n"
+                    f"💵 <b>Efectivo Disponible:</b> ${acc.get('cash', 1000000.0):,.2f} USD\n"
+                    f"📊 <b>Posiciones Abiertas:</b> {len(pos)}\n"
+                    f"🛡️ <b>Riesgo por Operación:</b> {settings.RISK_PER_TRADE_PCT}% (${settings.MAX_PLANNED_RISK_PER_TRADE:,.0f} máx)\n"
                     f"───────────────────────────────\n"
-                    f"✅ *Resumen:* Cuadre diario completado sin inconsistencias.\n"
-                    f"📁 *Journal:* Registros inmutables auditados en SQLite."
+                    f"✅ <b>Resumen:</b> Supervisión y cuadre completados sin inconsistencias.\n"
+                    f"📁 <b>Journal:</b> Registros inmutables auditados en SQLite."
                 )
-                telegram_notifier.send_message(msg)
+                telegram_notifier.send_message_sync(msg, parse_mode="HTML")
 
             return {"success": True, "status": "SUCCESS", "report": report_payload}
         except Exception as e:

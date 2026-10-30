@@ -28,7 +28,7 @@ class TelegramAlertService:
     def is_configured(self) -> bool:
         return bool(self.bot_token and self.chat_id and settings.TELEGRAM_ENABLED)
 
-    def send_message_sync(self, text: str) -> bool:
+    def send_message_sync(self, text: str, parse_mode: str = "HTML") -> bool:
         """Envío síncrono para llamadas directas dentro de pipelines."""
         if not self.is_configured:
             return False
@@ -36,12 +36,19 @@ class TelegramAlertService:
         payload = {
             "chat_id": self.chat_id,
             "text": text,
-            "parse_mode": "Markdown"
+            "parse_mode": parse_mode
         }
         try:
             with httpx.Client(timeout=8.0) as client:
                 resp = client.post(url, json=payload)
-                return resp.status_code == 200
+                if resp.status_code == 200:
+                    return True
+                # Fallback to plain text if formatting error
+                if resp.status_code == 400 and parse_mode != "":
+                    payload.pop("parse_mode", None)
+                    fallback_resp = client.post(url, json=payload)
+                    return fallback_resp.status_code == 200
+                return False
         except Exception as e:
             logger.warning(f"Error enviando mensaje a Telegram: {e}")
             return False

@@ -23,6 +23,7 @@ from ai_trading_agent.execution.paper_broker import paper_broker
 from ai_trading_agent.execution.brokers.unified_manager import unified_broker
 from ai_trading_agent.reporting.explanation_engine import explanation_engine
 from ai_trading_agent.notifications.telegram_service import telegram_notifier
+from ai_trading_agent.execution.fidelity.engine import paper_fidelity_engine
 from ai_trading_agent.scanner.scheduler import weekend_scheduler
 from ai_trading_agent.scanner.report_formatter import format_report_to_markdown
 
@@ -35,6 +36,28 @@ app = FastAPI(
     version="1.2.0",
     description="Arquitectura cuantitativa determinista para análisis y Paper Trading sin riesgo de dinero real."
 )
+
+
+@app.on_event("startup")
+async def on_startup():
+    from ai_trading_agent.schedule.scheduler_service import master_scheduler
+    master_scheduler.start()
+    try:
+        from ai_trading_agent.notifications.telegram_notifier import telegram_observability
+        telegram_observability.notify_system_online()
+    except Exception:
+        pass
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    try:
+        from ai_trading_agent.notifications.telegram_notifier import telegram_observability
+        telegram_observability.notify_system_offline()
+    except Exception:
+        pass
+    from ai_trading_agent.schedule.scheduler_service import master_scheduler
+    master_scheduler.stop()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -84,6 +107,8 @@ def health_check() -> Dict[str, Any]:
         "telegram_enabled": telegram_notifier.is_configured,
         "risk_per_trade_pct": settings.RISK_PER_TRADE_PCT,
         "max_daily_loss_pct": settings.MAX_DAILY_LOSS_PCT,
+        "paper_fidelity_engine": "ACTIVE",
+        "fidelity_observability": paper_fidelity_engine.get_observability_status(),
         "timestamp": datetime.utcnow().isoformat()
     }
 

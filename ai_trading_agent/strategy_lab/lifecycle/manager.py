@@ -138,7 +138,7 @@ class LifecycleManager:
         # Aplicar transición
         strat.status = target_status
         strat.updated_at = datetime.now(timezone.utc)
-        strategy_registry.register_strategy(strat)
+        strategy_registry.register_strategy(strat, allow_governance_override=True)
 
         return True, f"Estrategia {strategy_id} promovida exitosamente a {target_status.value} por {actor}. Razón: {reason}", strat
 

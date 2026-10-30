@@ -30,6 +30,7 @@ from ai_trading_agent.execution.paper_broker import paper_broker
 from ai_trading_agent.execution.brokers.unified_manager import unified_broker
 from ai_trading_agent.journal.trade_journal import trade_journal
 from ai_trading_agent.notifications.telegram_service import telegram_notifier
+from ai_trading_agent.execution.fidelity.engine import paper_fidelity_engine
 
 
 class TradingPipelineOrchestrator:
@@ -180,6 +181,27 @@ class TradingPipelineOrchestrator:
             decision_msg = "Aprobado para análisis (Modo ANALYSIS_ONLY activo: orden no simulada por diseño)"
         elif self.mode == TradingMode.PAPER_TRADING:
             side = OrderSide.BUY if proposal.direction == SignalDirection.BUY else OrderSide.SELL
+            
+            # Fidelity Engine: 1. Capturar intención esperada ANTES del envío al broker
+            strat_name = proposal.strategy_name if hasattr(proposal, "strategy_name") and proposal.strategy_name else "D21_RangeCompress_5d"
+            try:
+                paper_fidelity_engine.capture_expected_execution(
+                    strategy_id=strat_name,
+                    signal_id=proposal.decision_id,
+                    symbol=symbol,
+                    side=side.value,
+                    signal_price=proposal.entry_price,
+                    expected_entry_price=proposal.entry_price,
+                    expected_position_size=risk_assessment.approved_quantity,
+                    expected_risk_amount=risk_assessment.calculated_risk_dollars if hasattr(risk_assessment, "calculated_risk_dollars") else (abs(proposal.entry_price - proposal.stop_loss) * risk_assessment.approved_quantity),
+                    expected_risk_pct=settings.RISK_PER_TRADE_PCT,
+                    expected_stop_price=proposal.stop_loss,
+                    expected_take_profit_price=proposal.take_profit,
+                    market_regime=regime.value if hasattr(regime, "value") else str(regime)
+                )
+            except Exception:
+                pass
+
             order = PaperOrder(
                 order_id=f"ord_{proposal.decision_id}",
                 decision_id=proposal.decision_id,
@@ -198,6 +220,25 @@ class TradingPipelineOrchestrator:
             execution_price = filled_order.avg_fill_price
             broker_label = unified_broker.active_broker_name.upper()
             decision_msg = f"Orden Paper ejecutada en {broker_label}: {filled_order.quantity} acciones @ ${execution_price:,.2f}"
+
+            # Fidelity Engine: 2. Capturar resultado real del broker y auditar discrepancias
+            try:
+                paper_fidelity_engine.capture_actual_execution(
+                    signal_id=proposal.decision_id,
+                    order_id=filled_order.order_id,
+                    requested_price=proposal.entry_price,
+                    requested_quantity=risk_assessment.approved_quantity,
+                    actual_fill_price=filled_order.avg_fill_price,
+                    actual_quantity=filled_order.quantity,
+                    actual_stop_price=proposal.stop_loss,
+                    actual_take_profit_price=proposal.take_profit,
+                    order_status=filled_order.status.value if hasattr(filled_order.status, "value") else str(filled_order.status),
+                    order_created_at=order.created_at,
+                    fill_timestamp=filled_order.filled_at or datetime.utcnow()
+                )
+                paper_fidelity_engine.compare_execution(proposal.decision_id)
+            except Exception:
+                pass
         else:
             decision_msg = f"Modo {self.mode} registrado"
 

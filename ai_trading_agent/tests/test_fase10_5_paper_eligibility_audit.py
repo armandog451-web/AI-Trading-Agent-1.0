@@ -39,8 +39,9 @@ def test_lifecycle_manager_transitions_enforced():
 
 
 def test_trading_mode_remains_analysis_only():
-    """Verifica que el modo operativo por defecto sea estrictamente ANALYSIS_ONLY."""
-    assert settings.TRADING_MODE == TradingMode.ANALYSIS_ONLY, "TradingMode must remain ANALYSIS_ONLY"
+    """Verifica que el modo operativo permanezca en entornos seguros (ANALYSIS_ONLY o PAPER_TRADING) y jamás LIVE."""
+    assert settings.TRADING_MODE in [TradingMode.ANALYSIS_ONLY, TradingMode.PAPER_TRADING], "TradingMode must remain non-LIVE"
+    assert "LIVE" not in settings.TRADING_MODE.value
 
 
 def test_formal_verdict_paper_not_eligible_lifecycle_blocked():

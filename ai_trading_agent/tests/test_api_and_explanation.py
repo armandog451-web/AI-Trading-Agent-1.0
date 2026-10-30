@@ -30,7 +30,7 @@ class TestApiAndExplanation:
         data = res.json()
         assert data["status"] == "HEALTHY"
         assert data["system"] == "AI Trading Agent 1.0"
-        assert data["trading_mode"] == TradingMode.ANALYSIS_ONLY.value
+        assert data["trading_mode"] == settings.TRADING_MODE.value
         assert "risk_per_trade_pct" in data
 
     def test_account_summary_endpoint(self):

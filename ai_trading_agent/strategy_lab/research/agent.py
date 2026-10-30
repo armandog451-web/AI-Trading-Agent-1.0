@@ -168,10 +168,26 @@ class AIResearchAgent:
                 walk_forward_stability=75.0
             )
 
-            current_strat.robustness_score = rob_report.robustness_score
-            current_strat.strategy_score = strat_score
-            current_strat.metrics = exp.metrics
-            strategy_registry.register_strategy(current_strat)
+            # Salvaguarda: No sobrescribir métricas de estrategias en estados protegidos (PAPER, APPROVED, etc.)
+            if current_strat.status in (StrategyStatus.PAPER, StrategyStatus.APPROVED, StrategyStatus.PAUSED, StrategyStatus.RETIRED):
+                logger.warning(
+                    f"Estrategia {current_strat.strategy_id} en estado protegido ({current_strat.status.value}). "
+                    f"Experimento {exp.experiment_id} registrado en lab_experiments sin alterar métricas canónicas del registry."
+                )
+            else:
+                current_strat.robustness_score = rob_report.robustness_score
+                current_strat.strategy_score = strat_score
+                current_strat.metrics = exp.metrics
+                strategy_registry.register_strategy(
+                    current_strat,
+                    provenance={
+                        "dataset_version": exp.dataset_version,
+                        "timeframe": exp.timeframe,
+                        "experiment_id": exp.experiment_id,
+                        "source_type": "autonomous_research_cycle",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                )
 
             if strat_score > best_score:
                 best_score = strat_score
