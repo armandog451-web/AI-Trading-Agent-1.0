@@ -2,6 +2,9 @@
 title Sincronizar Cambios con GitHub
 cd /d "%~dp0"
 set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%PATH%"
+for /d %%D in ("%LOCALAPPDATA%\GitHubDesktop\app-*") do (
+    if exist "%%D\resources\app\git\cmd\git.exe" set "PATH=%%D\resources\app\git\cmd;%PATH%"
+)
 
 echo ==============================================================
 echo    TradePulse - Guardando y Sincronizando con GitHub

@@ -5,6 +5,7 @@ Servidor API REST FastAPI para AI Trading Agent 1.0 (Instrucción 5 y 14).
 Permite la inspección en tiempo real, análisis bajo demanda, ejecución de backtests y control del Kill Switch.
 """
 
+import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
@@ -285,7 +286,7 @@ def get_schedule_status() -> Dict[str, Any]:
 
 @app.post("/api/schedule/run-task")
 async def run_schedule_task(req: RunScheduleTaskRequest = Body(...)) -> Dict[str, Any]:
-    """Ejecución manual de tareas programadas desde el Dashboard (premarket_scan, weekend_scan, daily_report)."""
+    """Ejecución manual de tareas programadas desde el Dashboard (premarket_scan, weekend_scan, daily_report, d21_paper_eval, github_sync)."""
     from ai_trading_agent.schedule.scheduler_service import master_scheduler
     t_name = req.task_name.lower()
     if t_name == "premarket_scan":
@@ -294,10 +295,15 @@ async def run_schedule_task(req: RunScheduleTaskRequest = Body(...)) -> Dict[str
         return await master_scheduler.run_weekend_scan(force=req.force)
     elif t_name == "daily_report":
         return await master_scheduler.run_daily_report(force=req.force)
+    elif t_name == "d21_paper_eval":
+        res = await master_scheduler.evaluate_and_execute_d21_paper()
+        return {"success": True, "status": "SUCCESS", "d21_evaluation": res}
+    elif t_name == "github_sync":
+        return await asyncio.to_thread(master_scheduler.sync_to_github)
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Tarea '{req.task_name}' no reconocida. Opciones válidas: 'premarket_scan', 'weekend_scan', 'daily_report'."
+            detail=f"Tarea '{req.task_name}' no reconocida. Opciones válidas: 'premarket_scan', 'weekend_scan', 'daily_report', 'd21_paper_eval', 'github_sync'."
         )
 
 

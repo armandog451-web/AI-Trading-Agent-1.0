@@ -90,3 +90,17 @@ def test_15_exclusivity_paper_strategies():
     all_strats = strategy_registry.list_strategies()
     paper_strats = [s.strategy_id for s in all_strats if s.status == StrategyStatus.PAPER]
     assert paper_strats == ["D21_RangeCompress_5d"], f"Expected only D21 in PAPER, found {paper_strats}"
+
+
+def test_16_d21_direct_moomoo_execution_pipeline():
+    import asyncio
+    res = asyncio.run(master_scheduler.evaluate_and_execute_d21_paper())
+    assert res["strategy_id"] == "D21_RangeCompress_5d"
+    assert res["broker"] == "moomoo"
+    assert set(res["evaluated_symbols"].keys()) == {"SPY", "QQQ", "IWM", "DIA"}
+
+
+def test_17_github_auto_sync_resolution():
+    git_bin = master_scheduler._resolve_git_binary()
+    assert git_bin is not None
+    assert hasattr(master_scheduler, "sync_to_github")
